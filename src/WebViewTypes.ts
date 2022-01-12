@@ -1153,6 +1153,8 @@ export interface WebViewSharedProps extends ViewProps {
     */
   onIntercept?: (event: WebViewInterceptEvent) => void;
 
+  onInterceptCallback:(event:WebViewInterceptEvent) => boolean;
+
   /**
    * Function that is invoked when the `WebView` is loading.
    */

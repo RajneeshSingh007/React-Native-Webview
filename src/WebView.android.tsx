@@ -278,10 +278,17 @@ class WebView extends React.Component<AndroidWebViewProps, State> {
     }
   };
 
+  /**
+   * on intercept
+   * @param event 
+   */
   onIntercept = (event: WebViewInterceptEvent) => {
-    const { onIntercept } = this.props;
-    if (onIntercept) {
-      onIntercept(event);
+    const { onInterceptCallback } = this.props;
+    if (onInterceptCallback) {
+      const result = onInterceptCallback(event);
+      const { nativeEvent} = event;
+      const {lockIdentifier} = nativeEvent;
+      NativeModules.RNCWebView.onInterceptCallback(result,lockIdentifier);
     }
   };
 

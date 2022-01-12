@@ -82,7 +82,30 @@ public class RNCWebViewModule extends ReactContextBaseJavaModule implements Acti
     }
   }
 
+  protected static class InterceptOverrideLoadingLock {
+    private int nextLockIdentifier = 1;
+    private final HashMap<Integer, AtomicReference<ReadableMap>> shouldOverrideLocks = new HashMap<>();
+
+    public synchronized Pair<Integer, AtomicReference<ReadableMap>> getNewLock() {
+      final int lockIdentifier = nextLockIdentifier++;
+      final AtomicReference<ReadableMap> shouldOverride = new AtomicReference<>();
+      shouldOverrideLocks.put(lockIdentifier, shouldOverride);
+      return new Pair<>(lockIdentifier, shouldOverride);
+    }
+
+    @Nullable
+    public synchronized AtomicReference<ReadableMap> getLock(Integer lockIdentifier) {
+      return shouldOverrideLocks.get(lockIdentifier);
+    }
+
+    public synchronized void removeLock(Integer lockIdentifier) {
+      shouldOverrideLocks.remove(lockIdentifier);
+    }
+  }
+
+
   protected static final ShouldOverrideUrlLoadingLock shouldOverrideUrlLoadingLock = new ShouldOverrideUrlLoadingLock();
+  protected static final InterceptOverrideLoadingLock interceptOverrideLoadingLock = new InterceptOverrideLoadingLock();
 
   private enum MimeType {
     DEFAULT("*/*"),
@@ -150,9 +173,15 @@ public class RNCWebViewModule extends ReactContextBaseJavaModule implements Acti
     }
   }
 
-  @ReactMethod(isBlockingSynchronousMethod = false)
-  public ReadableMap onIntercept(final ReadableMap readableMap) {
-    return readableMap;
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  public void onInterceptCallback(final ReadableMap data,final int lockIdentifier) {
+    final AtomicReference<ReadableMap> lockObject = interceptOverrideLoadingLock.getLock(lockIdentifier);
+    if (lockObject != null) {
+      synchronized (lockObject) {
+        lockObject.set(data);
+        lockObject.notify();
+      }
+    }
   }
 
   public void onActivityResult(Activity activity, int requestCode, int resultCode, Intent data) {

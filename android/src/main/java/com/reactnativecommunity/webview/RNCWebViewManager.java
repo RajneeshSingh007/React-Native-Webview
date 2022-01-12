@@ -93,6 +93,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.BufferedInputStream;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.UnsupportedEncodingException;
@@ -971,6 +972,7 @@ public class RNCWebViewManager extends SimpleViewManager<WebView> {
       } catch (JSONException e) {
         e.printStackTrace();
       }
+      //download file into base64
       if(mimeType != null){
         try {
           URL httpUrl = new URL(request.getUrl().toString());
@@ -988,8 +990,55 @@ public class RNCWebViewManager extends SimpleViewManager<WebView> {
           Log.d("Error", e.toString());
         }
       }
-      if (rncWebView.mCatalystInstance != null) {
+      final boolean isJsDebugging = ((ReactContext) view.getContext()).getJavaScriptContextHolder().get() == 0;
+      if (!isJsDebugging && rncWebView.mCatalystInstance != null) {
+
+        final Pair<Integer, AtomicReference<ReadableMap>> lock = RNCWebViewModule.interceptOverrideLoadingLock.getNewLock();
+        final int lockIdentifier = lock.first;
+        final AtomicReference<ReadableMap> lockObject = lock.second;
+
+        eventData.putInt("lockIdentifier", lockIdentifier);
         rncWebView.sendDirectMessage("onIntercept", eventData);
+
+        try {
+          assert lockObject != null;
+          synchronized (lockObject) {
+            final long startTime = SystemClock.elapsedRealtime();
+            while (lockObject.get() == null) {
+              if (SystemClock.elapsedRealtime() - startTime > 250) {
+                FLog.w(TAG, "Did not receive response to interceptOverrideLoadingLock in time, defaulting to allow loading.");
+                RNCWebViewModule.interceptOverrideLoadingLock.removeLock(lockIdentifier);
+              }
+              lockObject.wait(250);
+            }
+          }
+          return super.shouldInterceptRequest(view, request);
+        } catch (InterruptedException e) {
+          FLog.e(TAG, "interceptOverrideLoadingLock was interrupted while waiting for result.", e);
+          RNCWebViewModule.interceptOverrideLoadingLock.removeLock(lockIdentifier);
+        }
+
+        //data from react native containing files...
+        final ReadableMap data = lockObject.get();
+        if(data != null){
+          if(data.getString("mimetype") != null && data.getString("file") != null) {
+            String callbackMimeType = data.getString("mimetype");
+            if(!TextUtils.isEmpty(callbackMimeType)){
+              //allow text, js, html, images,video
+              if(callbackMimeType.contains("text") || callbackMimeType.contains("js") || callbackMimeType.contains("html") || callbackMimeType.contains("svg") || callbackMimeType.contains("xml") || callbackMimeType.contains("video") || callbackMimeType.contains("image")){
+                Log.e("callbackMimeType",callbackMimeType);
+                if(!data.getString("file").equals("undefined")){
+                  String callbackFileBase64 = data.getString("file");
+                  //Log.e("callbackMimeType",callbackMimeType);
+                  //Log.e("callbackFileBase64",callbackFileBase64);
+                  final byte[] imgBytesData = android.util.Base64.decode(callbackFileBase64, android.util.Base64.DEFAULT);
+                  return new WebResourceResponse(callbackMimeType, "UTF-8", new ByteArrayInputStream(imgBytesData));
+                }
+              }
+            }
+          }
+        }
+        RNCWebViewModule.interceptOverrideLoadingLock.removeLock(lockIdentifier);
       } else {
         rncWebView.dispatchEvent(rncWebView, new TopShouldInterceptRequestEvent(view.getId(), eventData));
       }
