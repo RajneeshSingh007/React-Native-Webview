@@ -131,6 +131,14 @@ export interface WebViewIntercept extends WebViewNativeEvent {
   data: string;
 }
 
+export interface OnInterceptReceive {
+  file:string,
+  offline:boolean,
+  mimetype:string,
+  url:string,
+  cache:boolean
+}
+
 export interface WebViewError extends WebViewNativeEvent {
   /**
    * `domain` is only used on iOS and macOS
@@ -1153,7 +1161,7 @@ export interface WebViewSharedProps extends ViewProps {
     */
   onIntercept?: (event: WebViewInterceptEvent) => void;
 
-  onInterceptCallback:(event:WebViewInterceptEvent) => boolean;
+  onInterceptCallback:(event:WebViewInterceptEvent) => OnInterceptReceive;
 
   /**
    * Function that is invoked when the `WebView` is loading.

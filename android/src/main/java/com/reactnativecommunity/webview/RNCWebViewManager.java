@@ -93,8 +93,14 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.UnsupportedEncodingException;
 import java.net.MalformedURLException;
@@ -166,6 +172,10 @@ public class RNCWebViewManager extends SimpleViewManager<WebView> {
   protected boolean mAllowsFullscreenVideo = false;
   protected @Nullable String mUserAgent = null;
   protected @Nullable String mUserAgentWithApplicationName = null;
+
+  //waiting time for intercept
+  protected static final int INTERCEPT_WAITING_TIMEOUT = 1800000;
+
 
   public RNCWebViewManager() {
     mWebViewConfig = new WebViewConfig() {
@@ -950,6 +960,68 @@ public class RNCWebViewManager extends SimpleViewManager<WebView> {
       return type;
     }
 
+    /**
+     * read file
+     * @param f
+     * @return
+     * @throws IOException
+     */
+    private byte[] readFileToBytes(File f) throws IOException {
+      int size = (int) f.length();
+      byte bytes[] = new byte[size];
+      byte tmpBuff[] = new byte[size];
+      FileInputStream fis= new FileInputStream(f);
+      try {
+
+        int read = fis.read(bytes, 0, size);
+        if (read < size) {
+          int remain = size - read;
+          while (remain > 0) {
+            read = fis.read(tmpBuff, 0, remain);
+            System.arraycopy(tmpBuff, 0, bytes, size - remain, read);
+            remain -= read;
+          }
+        }
+      }  catch (IOException e){
+        e.printStackTrace();
+      } finally {
+        fis.close();
+      }
+
+      return bytes;
+    }
+
+    /**
+     * save file
+     * @param data
+     * @param fileName
+     * @param context
+     */
+    private void saveBytesFile(byte [] data, String fileName, Context context){
+      FileOutputStream fileOutputStream = null;
+      BufferedOutputStream  bufferedOutputStream = null;
+      try {
+        final File file = new File(context.getFilesDir(),fileName);
+        if (!file.exists()) {
+          boolean createFile = file.createNewFile();
+        }
+        fileOutputStream = new FileOutputStream(file);
+        bufferedOutputStream = new BufferedOutputStream(fileOutputStream);
+        bufferedOutputStream.write(data);
+      } catch (IOException e) {
+        e.printStackTrace();
+      } finally {
+        if(bufferedOutputStream !=  null){
+          try {
+            bufferedOutputStream.close();
+          } catch (IOException e) {
+            e.printStackTrace();
+          }
+        }
+      }
+    }
+
+
     @Nullable
     @Override
     public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
@@ -1005,44 +1077,66 @@ public class RNCWebViewManager extends SimpleViewManager<WebView> {
           synchronized (lockObject) {
             final long startTime = SystemClock.elapsedRealtime();
             while (lockObject.get() == null) {
-              if (SystemClock.elapsedRealtime() - startTime > 250) {
-                FLog.w(TAG, "Did not receive response to interceptOverrideLoadingLock in time, defaulting to allow loading.");
+              if (SystemClock.elapsedRealtime() - startTime > INTERCEPT_WAITING_TIMEOUT) {
+                FLog.w(TAG, "Did not receive response to interceptOverrideLoadingLock in time");
                 RNCWebViewModule.interceptOverrideLoadingLock.removeLock(lockIdentifier);
               }
-              lockObject.wait(250);
+              lockObject.wait(INTERCEPT_WAITING_TIMEOUT);
             }
           }
-          return super.shouldInterceptRequest(view, request);
         } catch (InterruptedException e) {
           FLog.e(TAG, "interceptOverrideLoadingLock was interrupted while waiting for result.", e);
           RNCWebViewModule.interceptOverrideLoadingLock.removeLock(lockIdentifier);
         }
-
         //data from react native containing files...
         final ReadableMap data = lockObject.get();
+        boolean cacheFile = false;
         if(data != null){
-          if(data.getString("mimetype") != null && data.getString("file") != null) {
-            String callbackMimeType = data.getString("mimetype");
-            if(!TextUtils.isEmpty(callbackMimeType)){
-              //allow text, js, html, images,video
-              if(callbackMimeType.contains("text") || callbackMimeType.contains("js") || callbackMimeType.contains("html") || callbackMimeType.contains("svg") || callbackMimeType.contains("xml") || callbackMimeType.contains("video") || callbackMimeType.contains("image")){
-                Log.e("callbackMimeType",callbackMimeType);
-                if(!data.getString("file").equals("undefined")){
-                  String callbackFileBase64 = data.getString("file");
-                  //Log.e("callbackMimeType",callbackMimeType);
-                  //Log.e("callbackFileBase64",callbackFileBase64);
-                  final byte[] imgBytesData = android.util.Base64.decode(callbackFileBase64, android.util.Base64.DEFAULT);
-                  return new WebResourceResponse(callbackMimeType, "UTF-8", new ByteArrayInputStream(imgBytesData));
+          cacheFile = data.getBoolean("cache");
+          Log.e("cacheFile", String.valueOf(cacheFile));
+          if(cacheFile){
+            boolean loadOfflineFile = data.getBoolean("offline");
+            if(data.getString("mimetype") != null && data.getString("file") != null && data.getString("url") != null) {
+              String callbackMimeType = data.getString("mimetype");
+              String fileUrl = data.getString("url");
+              if(!data.getString("file").equals("undefined")){
+                String callbackFileBase64 = data.getString("file");
+                Log.e("callbackMimeType", callbackMimeType);
+                String[] urlSplit = fileUrl.split("/");
+                String urlFileName = urlSplit[urlSplit.length-1];
+                Log.e("urlFileName", urlFileName);
+                final File checkIfFileExists = new File(rncWebView.getContext().getFilesDir(),urlFileName);
+                Log.e("checkIfFileExists", String.valueOf(checkIfFileExists.exists()));
+                RNCWebViewModule.interceptOverrideLoadingLock.removeLock(lockIdentifier);
+                if(checkIfFileExists.exists() && loadOfflineFile){
+                  final byte[] fileBytesData;
+                  try {
+                    //read file from online
+                    fileBytesData = readFileToBytes(checkIfFileExists);
+                    return new WebResourceResponse(callbackMimeType, "UTF-8", new ByteArrayInputStream(fileBytesData));
+                  } catch (IOException e) {
+                    e.printStackTrace();
+                  }
+                }else{
+                  //save file for offline
+                  final byte[] fileBytesData = android.util.Base64.decode(callbackFileBase64, android.util.Base64.DEFAULT);
+                  saveBytesFile(fileBytesData, urlFileName, rncWebView.getContext());
+                  return new WebResourceResponse(callbackMimeType, "UTF-8", new ByteArrayInputStream(fileBytesData));
                 }
+                //Log.e("callbackFileBase64",callbackFileBase64);
               }
             }
+          }else{
+            RNCWebViewModule.interceptOverrideLoadingLock.removeLock(lockIdentifier);
+            return super.shouldInterceptRequest(view, request);
           }
         }
         RNCWebViewModule.interceptOverrideLoadingLock.removeLock(lockIdentifier);
+        return super.shouldInterceptRequest(view, request);
       } else {
         rncWebView.dispatchEvent(rncWebView, new TopShouldInterceptRequestEvent(view.getId(), eventData));
+        return super.shouldInterceptRequest(view, request);
       }
-      return super.shouldInterceptRequest(view, request);
     }
 
     @Override

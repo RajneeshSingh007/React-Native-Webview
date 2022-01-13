@@ -288,7 +288,9 @@ class WebView extends React.Component<AndroidWebViewProps, State> {
       const result = onInterceptCallback(event);
       const { nativeEvent} = event;
       const {lockIdentifier} = nativeEvent;
-      NativeModules.RNCWebView.onInterceptCallback(result,lockIdentifier);
+      //if(result.offline){
+        NativeModules.RNCWebView.onInterceptCallback(result,lockIdentifier);
+      //}    
     }
   };
 
